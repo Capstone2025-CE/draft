@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const MyApp());
@@ -21,40 +19,20 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class MyHomePage extends StatelessWidget {
   const MyHomePage({super.key, required this.title});
   final String title;
 
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
+  void _openCamera() {
+    // Placeholder: Add camera logic later
+    print("📷 Camera opened!");
+  }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  // Make function async
-  Future<void> _incrementCounter() async {
-    setState(() {
-      _counter++;
-    });
-
-    // Send counter to FastAPI backend
-    final url = Uri.parse("http://10.0.2.2:8000/update-counter");
-    try {
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"value": _counter}),
-      );
-
-      if (response.statusCode == 200) {
-        print("✅ Counter sent: $_counter | Response: ${response.body}");
-      } else {
-        print("❌ Failed with status: ${response.statusCode}");
-      }
-    } catch (e) {
-      print("⚠️ Error sending counter: $e");
-    }
+  void _openForm(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const UserFormPage()),
+    );
   }
 
   @override
@@ -62,24 +40,51 @@ class _MyHomePageState extends State<MyHomePage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
+        title: Text(title),
       ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+          children: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                minimumSize: const Size(200, 60),
+              ),
+              onPressed: _openCamera,
+              child: const Text(
+                "Open Camera",
+                style: TextStyle(fontSize: 20, color: Colors.white),
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                minimumSize: const Size(200, 60),
+              ),
+              onPressed: () => _openForm(context),
+              child: const Text(
+                "Open User Form",
+                style: TextStyle(fontSize: 20, color: Colors.white),
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter, // now works fine
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+}
+
+class UserFormPage extends StatelessWidget {
+  const UserFormPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("User Form")),
+      body: const Center(
+        child: Text("Form will go here", style: TextStyle(fontSize: 22)),
       ),
     );
   }

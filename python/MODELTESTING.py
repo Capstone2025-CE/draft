@@ -24,13 +24,13 @@ DB_CONFIG = {
     "port": 3306,
     "user": "root",
     "password": "root",
-    "database": "cvproject"  # Replace with your MySQL database name
+    "database": "cvproj"  # Replace with your MySQL database name
 }
 
 # Function to reload the database with new images and embeddings
 def reload_database():
-        EXCEL_PATH = "CVPROJECT.xlsx"
-        IMAGES_FOLDER = "images"
+        EXCEL_PATH = "C:\captsoneFiles\python\CVPROJECT.xlsx"
+        IMAGES_FOLDER = "C:\captsoneFiles\python\images"
 
         # Load the Excel file
         try:
@@ -95,96 +95,116 @@ students_within_one_hour = []
 
 # Function to load embeddings from the specified path
 def load_embeddings():
-    #Load face embeddings from MySQL and create FAISS index.
-    conn = mysql.connector.connect(
-        host="127.0.0.1",
-        port=3306,
-        user="root",
-        password="root",
-        database="cvproject"
-    )
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, sap_id, rollno, embedding FROM face_embeddings")
-    rows = cursor.fetchall()
+    """
+    Load face embeddings from MySQL and create FAISS index.
+    Returns: index, names, sapids, rollnos
+    Raises: ValueError if no embeddings found
+    """
+    conn = None
+    try:
+        # Connect to DB
+        conn = mysql.connector.connect(
+            host="127.0.0.1",
+            port=3306,
+            user="root",
+            password="root",
+            database="cvproj"
+        )
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, sap_id, rollno, embedding FROM face_embeddings")
+        rows = cursor.fetchall()
 
-    embeddings = []
-    names = []
-    sapids = []
-    rollnos = []
+        embeddings = []
+        names = []
+        sapids = []
+        rollnos = []
 
-    for row in rows:
-        name = f"{row[0]} ({row[1]})"
-        sapid = row[1]
-        rollno = row[2]
-        embedding_str = row[3]
-        embedding = np.fromstring(embedding_str, sep=',', dtype=float)
+        for row in rows:
+            try:
+                name = f"{row[0]} ({row[1]})"
+                sapid = row[1]
+                rollno = row[2]
+                embedding_str = row[3]
 
-        embeddings.append(embedding)
-        names.append(name)
-        sapids.append(sapid)
-        rollnos.append(rollno)
+                if not embedding_str:
+                    print(f"⚠️ Skipping {sapid}: empty embedding string")
+                    continue
 
-    embeddings = np.array(embeddings).astype('float32')
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
+                embedding = np.array(list(map(float, embedding_str.split(','))), dtype=np.float32)
 
-    conn.close()
-    return index, names, sapids, rollnos
+                if embedding.size == 0:
+                    print(f"⚠️ Skipping {sapid}: invalid embedding array")
+                    continue
+
+                embeddings.append(embedding)
+                names.append(name)
+                sapids.append(sapid)
+                rollnos.append(rollno)
+
+            except Exception as row_err:
+                print(f"⚠️ Error processing row {row}: {row_err}")
+                continue
+
+        if len(embeddings) == 0:
+            raise ValueError("No valid embeddings found in database. Please reload the database first.")
+
+        # Build FAISS index
+        embeddings = np.vstack(embeddings).astype('float32')
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+        index.add(embeddings)
+
+        return index, names, sapids, rollnos
+
+    except mysql.connector.Error as db_err:
+        print(f"❌ MySQL Error: {db_err}")
+        raise
+    except Exception as e:
+        print(f"❌ Unexpected Error: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 def find_closest_match(embedding, faiss_index, names):
-    #Find the closest match using FAISS index.
+    """Find the closest match using FAISS index."""
     embedding = np.expand_dims(embedding, axis=0).astype('float32')
     distances, indices = faiss_index.search(embedding, 1)
+    
+    # Distance threshold to decide if it's a valid match
     if distances[0][0] < 0.77:
         return names[indices[0][0]]
     else:
         return "Unknown"
 
-    # Connect to MySQL
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="user123",
-        password="root",
-        database="attendance"
-    )
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT name, embedding FROM face_embeddings")
-    for name, embedding_str in cursor.fetchall():
-        embedding = np.array(ast.literal_eval(embedding_str), dtype=float)
-        names.append(name)
-        embeddings.append(embedding)
-
-    conn.close()
-
-    embeddings = np.array(embeddings)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
-
-    return index, names
-
-
 # Function to recognize faces and mark attendance
 def start_face_recognition():
-    # Start the webcam and run real-time face recognition.
-    faiss_index, names, sapids, rollnos = load_embeddings()
-    cap = cv2.VideoCapture(0)
+    try:
+        faiss_index, names, sapids, rollnos = load_embeddings()
+    except Exception as e:
+        print(f"Failed to load embeddings: {e}")
+        return
 
-    recognised_faces = []  # To store recognised faces with name and SAP ID
-    log_messages = []      # On-screen log messages with a timeout
-    log_timeout = 100      # Number of frames to show the message (e.g., ~3 seconds at 30fps)
+    cap = cv2.VideoCapture(0)
+    recognised_faces = []  # Store recognised faces with info
+    log_messages = []      # On-screen log messages
+    log_timeout = 100      # Frames to show the message
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        faces = detector.detect_faces(frame)
-        if faces:
-            face_images = []
-            face_boxes = []
+        try:
+            faces = detector.detect_faces(frame)
+        except Exception as e:
+            print(f"Face detection error: {e}")
+            continue
 
-            for face in faces:
+        face_images = []
+        face_boxes = []
+
+        for face in faces:
+            try:
                 x1, y1, w, h = face['box']
                 x1, y1 = abs(x1), abs(y1)
                 x2, y2 = x1 + w, y1 + h
@@ -198,58 +218,38 @@ def start_face_recognition():
 
                 face_images.append(face_img)
                 face_boxes.append((x1, y1, x2, y2))
-            for face in faces:
-                x1, y1, width, height = face['box']
-                x1, y1 = abs(x1), abs(y1)
-                x2, y2 = x1 + width, y1 + height
-                face_img = frame[y1:y2, x1:x2]
-                face_img = cv2.resize(face_img, (160, 160))
-                face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
-                face_images.append(face_img)
+            except Exception as e:
+                print(f"Error processing face box: {e}")
+                continue
 
+        if face_images:
             embeddings = embedder.embeddings(face_images)
 
             for i, embedding in enumerate(embeddings):
-                name = find_closest_match(embedding, faiss_index, names)
-                sapid = sapids[names.index(name)] if name != "Unknown" else None
-
-                if name != "Unknown" and name not in attendance_marked:
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                try:
+                    name = find_closest_match(embedding, faiss_index, names)
+                    sapid = sapids[names.index(name)] if name != "Unknown" else None
                     rollno = rollnos[names.index(name)] if name != "Unknown" else None
-                    recognised_faces.append({"name": name, "sapid": sapid, "rollno": rollno, "timestamp": timestamp})
-                    attendance_marked.add(name)
-                    log_messages.append((f"Marked: {name} ({sapid})", log_timeout))
 
-                if name != "Unknown" and name not in attendance_marked:
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-                    # Insert attendance into MySQL
-                    try:
-                        conn = mysql.connector.connect(**MYSQL_CONFIG)
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "INSERT INTO attendance (name, timestamp) VALUES (%s, %s)",
-                            (name, timestamp)
-                        )
-                        conn.commit()
-                        cursor.close()
-                        conn.close()
-                        print(f"Attendance marked for {name} at {timestamp}.")
+                    if name != "Unknown" and name not in attendance_marked:
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        recognised_faces.append({"name": name, "sapid": sapid, "rollno": rollno, "timestamp": timestamp})
                         attendance_marked.add(name)
+                        log_messages.append((f"Marked: {name} ({sapid})", log_timeout))
 
-                    except mysql.connector.Error as err:
-                        print(f"MySQL Error: {err}")
+                    elif name == "Unknown":
+                        log_messages.append(("Unknown Face", log_timeout))
 
-                elif name == "Unknown":
-                    log_messages.append(("Unknown Face", log_timeout))
+                    # Draw bounding box
+                    x1, y1, x2, y2 = face_boxes[i]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
+                except Exception as e:
+                    print(f"Error processing embedding: {e}")
+                    continue
 
-                # Draw bounding box and label
-                x1, y1, x2, y2 = face_boxes[i]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-        # Show latest message on the frame
+        # Display log message
         if log_messages:
             msg, timeout = log_messages[0]
             cv2.putText(frame, msg, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
@@ -257,9 +257,6 @@ def start_face_recognition():
                 log_messages.pop(0)
             else:
                 log_messages[0] = (msg, timeout - 1)
-                x1, y1, width, height = faces[i]['box']
-                cv2.rectangle(frame, (x1, y1), (x2, y1 + height), (0, 255, 0), 2)
-                cv2.putText(frame, f"{name}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
         cv2.imshow("Face Recognition", frame)
 
@@ -268,21 +265,22 @@ def start_face_recognition():
 
     cap.release()
     cv2.destroyAllWindows()
-    # Save recognised faces to a CSV file
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    csv_filename = f"attendance_{timestamp}.csv"
-    with open(csv_filename, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Name", "SAP ID", "Roll no.", "Timestamp"])
-        for face in recognised_faces:
-            writer.writerow([face["name"], face["sapid"], face["rollno"], face["timestamp"]])
 
-    # Return the total number of students recognised
+    # Save attendance to CSV
+    timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    csv_filename = f"attendance_{timestamp_str}.csv"
+    try:
+        with open(csv_filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Name", "SAP ID", "Roll no.", "Timestamp"])
+            for face in recognised_faces:
+                writer.writerow([face["name"], face["sapid"], face["rollno"], face["timestamp"]])
+    except Exception as e:
+        print(f"Error saving CSV: {e}")
+
     total_students = len(recognised_faces)
     print(f"Total number of students recognised: {total_students}")
     return recognised_faces, total_students
-
-    return recognised_faces
 
 #GUI
 def start_gui():
@@ -305,5 +303,3 @@ def start_gui():
     root.mainloop()
 
 start_gui()
-
-start_face_recognition()
