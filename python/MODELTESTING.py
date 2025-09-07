@@ -185,7 +185,6 @@ def start_face_recognition():
         return
 
     cap = cv2.VideoCapture(0)
-    recognised_faces = []  # Store recognised faces with info
     log_messages = []      # On-screen log messages
     log_timeout = 100      # Frames to show the message
 
@@ -233,17 +232,38 @@ def start_face_recognition():
 
                     if name != "Unknown" and name not in attendance_marked:
                         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        recognised_faces.append({"name": name, "sapid": sapid, "rollno": rollno, "timestamp": timestamp})
-                        attendance_marked.add(name)
-                        log_messages.append((f"Marked: {name} ({sapid})", log_timeout))
+
+                        # Insert attendance into MySQL
+                        try:
+                            conn = mysql.connector.connect(
+                                    host="127.0.0.1",
+                                    port=3306,
+                                    user="root",
+                                    password="root",
+                                    database="cvproj"
+                            )
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "INSERT INTO attendance (name, sapid, rollno, timestamp) VALUES (%s, %s, %s, %s)",
+                                (name, sapid, rollno, timestamp)
+                            )
+                            conn.commit()
+                            cursor.close()
+                            conn.close()
+                            print(f"Attendance marked for {name} at {timestamp}.")
+                            attendance_marked.add(name)
+                            log_messages.append((f"Marked: {name} ({sapid})", log_timeout))
+                        except mysql.connector.Error as err:
+                            print(f"MySQL Error: {err}")
 
                     elif name == "Unknown":
                         log_messages.append(("Unknown Face", log_timeout))
 
-                    # Draw bounding box
+                    # Draw bounding box and label
                     x1, y1, x2, y2 = face_boxes[i]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                    cv2.putText(frame, name, (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
                 except Exception as e:
                     print(f"Error processing embedding: {e}")
@@ -265,22 +285,8 @@ def start_face_recognition():
 
     cap.release()
     cv2.destroyAllWindows()
-
-    # Save attendance to CSV
-    timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    csv_filename = f"attendance_{timestamp_str}.csv"
-    try:
-        with open(csv_filename, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["Name", "SAP ID", "Roll no.", "Timestamp"])
-            for face in recognised_faces:
-                writer.writerow([face["name"], face["sapid"], face["rollno"], face["timestamp"]])
-    except Exception as e:
-        print(f"Error saving CSV: {e}")
-
-    total_students = len(recognised_faces)
-    print(f"Total number of students recognised: {total_students}")
-    return recognised_faces, total_students
+    print(f"Total number of students marked: {len(attendance_marked)}")
+    return attendance_marked
 
 #GUI
 def start_gui():
