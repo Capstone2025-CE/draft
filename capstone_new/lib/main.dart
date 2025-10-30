@@ -1,13 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
+import 'package:http/http.dart' as http; // <-- ADD THIS
+import 'dart:io'; // <-- ADD THIS
 
-void main() {
-  runApp(const MyApp());
+// IMPORTANT: Replace this with your PC's IP address from Step 1
+const String yourServerIp = "YOUR_PC_IP_ADDRESS";
+final String apiUrl = "http://$yourServerIp:8000/recognize-frame";
+
+void main() async {
+  // Ensure widgets are initialized
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Get available cameras
+  final cameras = await availableCameras();
+  final firstCamera = cameras.first;
+
+  runApp(MyApp(camera: firstCamera));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final CameraDescription camera;
+  const MyApp({super.key, required this.camera});
 
   @override
   Widget build(BuildContext context) {
@@ -16,25 +30,26 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      // Pass the camera to MyHomePage
+      home: MyHomePage(title: 'Flutter Demo Home Page', camera: camera),
     );
   }
 }
 
 class MyHomePage extends StatelessWidget {
-  const MyHomePage({super.key, required this.title});
   final String title;
+  final CameraDescription camera; // <-- Pass camera here
+
+  const MyHomePage({super.key, required this.title, required this.camera});
 
   Future<void> _openCamera(BuildContext context) async {
     var status = await Permission.camera.request();
     if (status.isGranted) {
-      final cameras = await availableCameras();
-      final firstCamera = cameras.first;
-
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => CameraPreviewPage(camera: firstCamera),
+          // Pass the camera to the preview page
+          builder: (context) => CameraPreviewPage(camera: camera),
         ),
       );
     } else {
@@ -103,6 +118,7 @@ class CameraPreviewPage extends StatefulWidget {
 class _CameraPreviewPageState extends State<CameraPreviewPage> {
   late CameraController _controller;
   late Future<void> _initializeControllerFuture;
+  bool _isProcessing = false; // To prevent multiple requests
 
   @override
   void initState() {
@@ -110,6 +126,93 @@ class _CameraPreviewPageState extends State<CameraPreviewPage> {
     _controller = CameraController(widget.camera, ResolutionPreset.high);
     _initializeControllerFuture = _controller.initialize();
   }
+
+  // --- NEW FUNCTION TO SEND IMAGE TO SERVER ---
+  Future<void> _recognizeFace(XFile picture) async {
+    if (_isProcessing) return;
+
+    setState(() {
+      _isProcessing = true;
+    });
+
+    // Show a loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // Create a multipart request
+      var request = http.MultipartRequest('POST', Uri.parse(apiUrl));
+
+      // Add the file to the request
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'frame', // This MUST match the argument name in FastAPI: `frame: UploadFile`
+          picture.path,
+        ),
+      );
+
+      // Send the request
+      final streamedResponse = await request.send();
+
+      // Get the response
+      final response = await http.Response.fromStream(streamedResponse);
+
+      // Close the loading dialog
+      Navigator.of(context).pop();
+
+      if (response.statusCode == 200) {
+        // The server returns the name as plain text (e.g., "John Doe" or "Unknown")
+        String recognizedName = response.body;
+
+        // Show result in an alert dialog
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text("Recognition Result"),
+            content: Text("Server recognized: $recognizedName"),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text("OK"),
+              ),
+            ],
+          ),
+        );
+      } else {
+        // Show error
+        _showErrorDialog("Server Error: ${response.statusCode}\n${response.body}");
+      }
+    } catch (e) {
+      // Close loading dialog
+      Navigator.of(context).pop();
+      // Show network or other error
+      _showErrorDialog("Error sending image: $e");
+    }
+
+    setState(() {
+      _isProcessing = false;
+    });
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Error"),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+  }
+  // --- END OF NEW FUNCTION ---
 
   @override
   void dispose() {
@@ -133,17 +236,24 @@ class _CameraPreviewPageState extends State<CameraPreviewPage> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
+          // MODIFIED: Send to server instead of just saving
+          if (_isProcessing) return; // Don't take picture if already processing
+
           try {
             await _initializeControllerFuture;
             final picture = await _controller.takePicture();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("📷 Saved at: ${picture.path}")),
-            );
+
+            // Call our new function
+            await _recognizeFace(picture);
+
           } catch (e) {
-            print("Error: $e");
+            print("Error taking picture: $e");
+            _showErrorDialog("Error taking picture: $e");
           }
         },
-        child: const Icon(Icons.camera_alt),
+        child: _isProcessing
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Icon(Icons.camera_alt),
       ),
     );
   }
