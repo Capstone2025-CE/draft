@@ -1,27 +1,47 @@
+import 'dart:async'; // For the Timer
+import 'dart:convert'; // For json.decode
+import 'dart:io'; // For HttpOverrides
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
-import 'package:http/http.dart' as http; // <-- ADD THIS
-import 'dart:io'; // <-- ADD THIS
+import 'package:http/http.dart' as http;
 
-// IMPORTANT: Replace this with your PC's IP address from Step 1
-const String yourServerIp = "YOUR_PC_IP_ADDRESS";
-final String apiUrl = "http://$yourServerIp:8000/recognize-frame";
+// --- FIX 1: HTTP OVERRIDE FOR SSL (Handshake Error) ---
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
+  }
+}
+// -----------------------------------------------------
 
-void main() async {
+// --- Your ngrok URL ---
+const String serverIp = "https://intertuberal-niki-nonexhibitionistic.ngrok-free.dev";
+final String apiUrl = "$serverIp/recognize-frame";
+
+List<CameraDescription> cameras = []; // Make cameras list global
+
+Future<void> main() async {
   // Ensure widgets are initialized
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Get available cameras
-  final cameras = await availableCameras();
-  final firstCamera = cameras.first;
+  // --- FIX 1 (Continued): Apply the override ---
+  HttpOverrides.global = MyHttpOverrides();
 
-  runApp(MyApp(camera: firstCamera));
+  try {
+    // Get available cameras
+    cameras = await availableCameras();
+  } on CameraException catch (e) {
+    print("Error fetching cameras: $e");
+  }
+
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  final CameraDescription camera;
-  const MyApp({super.key, required this.camera});
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -30,26 +50,32 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      // Pass the camera to MyHomePage
-      home: MyHomePage(title: 'Flutter Demo Home Page', camera: camera),
+      // Pass the camera list to MyHomePage
+      home: MyHomePage(title: 'Flutter Demo Home Page', cameras: cameras),
     );
   }
 }
 
 class MyHomePage extends StatelessWidget {
   final String title;
-  final CameraDescription camera; // <-- Pass camera here
+  final List<CameraDescription> cameras; // <-- Pass camera list
 
-  const MyHomePage({super.key, required this.title, required this.camera});
+  const MyHomePage({super.key, required this.title, required this.cameras});
 
   Future<void> _openCamera(BuildContext context) async {
     var status = await Permission.camera.request();
     if (status.isGranted) {
+      if (cameras.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No cameras found on device")),
+        );
+        return;
+      }
       Navigator.push(
         context,
         MaterialPageRoute(
-          // Pass the camera to the preview page
-          builder: (context) => CameraPreviewPage(camera: camera),
+          // Pass the camera list to the preview page
+          builder: (context) => CameraStreamPage(cameras: cameras),
         ),
       );
     } else {
@@ -84,7 +110,7 @@ class MyHomePage extends StatelessWidget {
               ),
               onPressed: () => _openCamera(context),
               child: const Text(
-                "Open Camera",
+                "Start Recognition", // Changed text
                 style: TextStyle(fontSize: 20, color: Colors.white),
               ),
             ),
@@ -107,89 +133,132 @@ class MyHomePage extends StatelessWidget {
   }
 }
 
-class CameraPreviewPage extends StatefulWidget {
-  final CameraDescription camera;
-  const CameraPreviewPage({super.key, required this.camera});
+// ======================================================
+// RENAMED and HEAVILY MODIFIED this page
+// ======================================================
+class CameraStreamPage extends StatefulWidget {
+  final List<CameraDescription> cameras;
+  const CameraStreamPage({super.key, required this.cameras});
 
   @override
-  State<CameraPreviewPage> createState() => _CameraPreviewPageState();
+  State<CameraStreamPage> createState() => _CameraStreamPageState();
 }
 
-class _CameraPreviewPageState extends State<CameraPreviewPage> {
-  late CameraController _controller;
-  late Future<void> _initializeControllerFuture;
-  bool _isProcessing = false; // To prevent multiple requests
+class _CameraStreamPageState extends State<CameraStreamPage> {
+  // --- FIX: Make controller and future nullable ---
+  CameraController? _controller;
+  Future<void>? _initializeControllerFuture;
+  // ------------------------------------------------
+
+  Timer? _frameTimer;
+  bool _isProcessing = false;
+  String _displayName = "Initializing...";
+  String _displaySapId = "N/A";
+  int _selectedCameraIndex = 0; // 0 for back, 1 for front
 
   @override
   void initState() {
     super.initState();
-    _controller = CameraController(widget.camera, ResolutionPreset.high);
-    _initializeControllerFuture = _controller.initialize();
+    // Start with the back camera (index 0)
+    _initCamera(widget.cameras[_selectedCameraIndex]);
   }
 
-  // --- NEW FUNCTION TO SEND IMAGE TO SERVER ---
-  Future<void> _recognizeFace(XFile picture) async {
+  // --- FIX: This function is now synchronous and assigns the future immediately ---
+  void _initCamera(CameraDescription cameraDescription) {
+
+    // If a controller already exists, cancel its timer
+    _frameTimer?.cancel();
+
+    // Create new controller
+    _controller = CameraController(
+      cameraDescription,
+      ResolutionPreset.medium,
+      enableAudio: false,
+    );
+
+    // Assign the future SYNCHRONOUSLY
+    _initializeControllerFuture = _controller!.initialize().then((_) {
+      // This block runs AFTER the future is complete
+      if (!mounted) return;
+      // Now we start the stream
+      _startFrameStream();
+    });
+
+    // Update the UI to show the new FutureBuilder (or loading state)
+    if (this.mounted) {
+      setState(() {});
+    }
+  }
+
+  // --- FIX: This function now properly disposes the old controller ---
+  Future<void> _flipCamera() async {
+    // Stop the timer
+    _frameTimer?.cancel();
+
+    // Toggle camera index
+    _selectedCameraIndex = (_selectedCameraIndex + 1) % widget.cameras.length;
+
+    // Dispose old controller *if it exists*
+    if (_controller != null) {
+      await _controller!.dispose();
+    }
+
+    // Re-initialize with the new camera
+    // This will set the new _initializeControllerFuture and restart the stream
+    _initCamera(widget.cameras[_selectedCameraIndex]);
+  }
+
+  // --- This function is correct ---
+  void _startFrameStream() {
+    // Make sure controller is initialized before starting timer
+    if (_controller == null || !_controller!.value.isInitialized) {
+      return;
+    }
+    _frameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      _sendCurrentFrame();
+    });
+  }
+
+  // --- This function is correct ---
+  Future<void> _sendCurrentFrame() async {
     if (_isProcessing) return;
+    if (_controller == null || !_controller!.value.isInitialized) {
+      return; // Safety check
+    }
 
     setState(() {
       _isProcessing = true;
     });
 
-    // Show a loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
     try {
-      // Create a multipart request
-      var request = http.MultipartRequest('POST', Uri.parse(apiUrl));
+      final picture = await _controller!.takePicture();
 
-      // Add the file to the request
+      var request = http.MultipartRequest('POST', Uri.parse(apiUrl));
       request.files.add(
-        await http.MultipartFile.fromPath(
-          'frame', // This MUST match the argument name in FastAPI: `frame: UploadFile`
-          picture.path,
-        ),
+        await http.MultipartFile.fromPath('frame', picture.path),
       );
 
-      // Send the request
       final streamedResponse = await request.send();
-
-      // Get the response
       final response = await http.Response.fromStream(streamedResponse);
 
-      // Close the loading dialog
-      Navigator.of(context).pop();
-
       if (response.statusCode == 200) {
-        // The server returns the name as plain text (e.g., "John Doe" or "Unknown")
-        String recognizedName = response.body;
-
-        // Show result in an alert dialog
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text("Recognition Result"),
-            content: Text("Server recognized: $recognizedName"),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text("OK"),
-              ),
-            ],
-          ),
-        );
+        final data = json.decode(response.body);
+        setState(() {
+          _displayName = data['name'];
+          _displaySapId = data['sap_id'];
+        });
       } else {
-        // Show error
-        _showErrorDialog("Server Error: ${response.statusCode}\n${response.body}");
+        setState(() {
+          _displayName = "Server Error";
+          _displaySapId = "${response.statusCode}";
+        });
       }
     } catch (e) {
-      // Close loading dialog
-      Navigator.of(context).pop();
-      // Show network or other error
-      _showErrorDialog("Error sending image: $e");
+      print("Error sending frame: $e");
+      setState(() {
+        _displayName = "Client Error";
+        _displaySapId = "N/A";
+      });
     }
 
     setState(() {
@@ -197,67 +266,76 @@ class _CameraPreviewPageState extends State<CameraPreviewPage> {
     });
   }
 
-  void _showErrorDialog(String message) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Error"),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text("OK"),
-          ),
-        ],
-      ),
-    );
-  }
-  // --- END OF NEW FUNCTION ---
-
   @override
   void dispose() {
-    _controller.dispose();
+    _frameTimer?.cancel();
+    _controller?.dispose(); // Use ?. to safely dispose
     super.dispose();
   }
+
+  // In _CameraStreamPageState class, inside main.dart
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Camera")),
+      appBar: AppBar(
+        title: const Text("Live Recognition"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.flip_camera_ios_outlined),
+            onPressed: _flipCamera,
+          ),
+        ],
+      ),
+      // --- FIX: Set background color for letterboxing ---
+      backgroundColor: Colors.black,
       body: FutureBuilder<void>(
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done) {
-            return CameraPreview(_controller);
-          } else {
+          if (_controller == null ||
+              snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
+
+          // --- FIX: Force the 9:16 Aspect Ratio ---
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // Center the camera preview
+              Center(
+                child: AspectRatio(
+                  aspectRatio: 3 / 4, // Your desired ratio
+                  child: CameraPreview(_controller!),
+                ),
+              ),
+              // --- This overlay is unchanged ---
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 12.0, horizontal: 8.0),
+                  color: Colors.black.withOpacity(0.6),
+                  child: Text(
+                    "Name: $_displayName\nSAP ID: $_displaySapId",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18.0,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
         },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          // MODIFIED: Send to server instead of just saving
-          if (_isProcessing) return; // Don't take picture if already processing
-
-          try {
-            await _initializeControllerFuture;
-            final picture = await _controller.takePicture();
-
-            // Call our new function
-            await _recognizeFace(picture);
-
-          } catch (e) {
-            print("Error taking picture: $e");
-            _showErrorDialog("Error taking picture: $e");
-          }
-        },
-        child: _isProcessing
-            ? const CircularProgressIndicator(color: Colors.white)
-            : const Icon(Icons.camera_alt),
       ),
     );
   }
 }
+// ======================================================
 
 class UserFormPage extends StatelessWidget {
   const UserFormPage({super.key});
