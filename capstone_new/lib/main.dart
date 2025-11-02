@@ -260,7 +260,7 @@ class _CameraStreamPageState extends State<CameraStreamPage> {
             children: [
               Center(
                 child: AspectRatio(
-                  aspectRatio: 9 / 16, // Force 9:16
+                  aspectRatio: 3 / 4, // Force 9:16
                   child: CameraPreview(_controller!),
                 ),
               ),

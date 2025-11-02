@@ -58,19 +58,26 @@ async def recognize_frame(frame: UploadFile = File(...)):
 
 
 # --- Student Registration Endpoint (1 Photo) ---
+# --- Student Registration Endpoint (1 Photo) ---
 @app.post("/student/register")
 async def register_student(
     sap_id: str = Form(...),
     name: str = Form(...),
-    password: str = Form(...), # You should hash this!
+    password: str = Form(...), 
     file: UploadFile = File(...) 
 ):
     """
     Receives student details and 1 image file for face registration.
     """
-    # Call the new function in MODELTESTING
-    result, status_code = register_student_mongo(sap_id, name, password, file)
     
+    # --- THIS IS THE FIX ---
+    # 1. Read the file contents as bytes asynchronously
+    file_contents = await file.read()
+    
+    # 2. Pass the raw *bytes* (file_contents) to your processing function
+    result, status_code = register_student_mongo(sap_id, name, password, file_contents)
+    # --- END OF FIX ---
+
     if status_code != 201:
         # If it failed, return the error message
         raise HTTPException(status_code=status_code, detail=result["error"])

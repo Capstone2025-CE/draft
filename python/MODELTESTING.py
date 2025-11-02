@@ -10,10 +10,9 @@ from tkinter import messagebox
 from keras_facenet import FaceNet
 from mtcnn import MTCNN # <-- REVERTED TO MTCNN
 from datetime import datetime, date
-import threading
-import time
-import csv
-import io
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- NEW: MONGODB IMPORTS ---
 from pymongo import MongoClient
@@ -23,7 +22,17 @@ import pickle
 
 # --- NEW: MONGODB SETUP ---
 # 1. Get your connection string from MongoDB Atlas
-MONGO_URI = "mongodb+srv://dbAdmin:Aditya123@cluster0.fv6ix91.mongodb.net/?retryWrites=true&w=majority"
+# NEW CODE
+MONGO_URI = os.getenv("MONGO_URI") # Reads from .env
+
+if not MONGO_URI:
+    print("="*50)
+    print("FATAL ERROR: MONGO_URI environment variable not found.")
+    print("Please create a .env file with your MongoDB connection string.")
+    print("="*50)
+    exit()
+
+client = MongoClient(MONGO_URI)
 DB_NAME = "capstone_project"
 
 # Create a new client and connect to the server
@@ -190,9 +199,10 @@ def mark_attendance_server(sap_id, name):
         return False
 
 # --- NEW: Function for Student Self-Registration (1 Photo) ---
-def register_student_mongo(sap_id, name, password, file):
+# --- NEW: Function for Student Self-Registration (1 Photo) ---
+def register_student_mongo(sap_id, name, password, image_bytes):
     """
-    Takes student info and 1 image file, generates an embedding (using MTCNN),
+    Takes student info and 1 image file (as bytes), generates an embedding,
     and saves to MongoDB.
     """
     if mongo_db is None:
@@ -209,19 +219,23 @@ def register_student_mongo(sap_id, name, password, file):
         detector = MTCNN()
         embedder = FaceNet()
         
-        image_data = file.read()
-        np_arr = np.frombuffer(image_data, np.uint8)
+        # --- THIS IS THE FIX ---
+        # The variable 'image_bytes' is ALREADY the data.
+        # We no longer call .read()
+        np_arr = np.frombuffer(image_bytes, np.uint8) 
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         
         if img is None:
-            return {"error": f"Could not read image: {file.filename}"}, 400
+            # We don't have 'file.filename' anymore, so just give a generic error
+            return {"error": "Could not read image: Corrupt file"}, 400
 
         # Convert to RGB for MTCNN
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         faces = detector.detect_faces(img_rgb)
 
         if not faces:
-            return {"error": f"No face found in image: {file.filename}"}, 400
+            # We don't have 'file.filename' anymore
+            return {"error": "No face found in image"}, 400
 
         x1, y1, w, h = faces[0]["box"] # Get first face
         x1, y1 = abs(x1), abs(y1)
@@ -258,5 +272,3 @@ def register_student_mongo(sap_id, name, password, file):
     except Exception as e:
         print(f"Error saving student to MongoDB: {e}")
         return {"error": "Database error"}, 500
-
-# --- Your old MySQL/Tkinter functions (add_teacher, etc.) are no longer needed for the server ---
