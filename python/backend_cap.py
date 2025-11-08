@@ -101,3 +101,7 @@ if __name__ == "_main_":
     print("Access the API at http://0.0.0.0:8000")
     # Set reload=False for stable production, reload=True for development
     uvicorn.run("backend_cap:app", host="0.0.0.0", port=8000, reload=False)
+
+# uvicorn backend_cap:app --host 0.0.0.0 --port 8000
+# tf-standalone\Scripts\Activate.ps1
+# ngrok http 8000
