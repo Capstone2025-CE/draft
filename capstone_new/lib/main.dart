@@ -186,11 +186,52 @@ class _CameraStreamPageState extends State<CameraStreamPage> {
     });
   }
 
+  // --- NEW: Notification Function ---
+  void _showAttendanceNotification(List<Map<String, dynamic>> faces) {
+    if (!mounted || faces.isEmpty) return;
+
+    // We'll just show a notification for the first face in the list
+    // to avoid spamming the user with multiple popups.
+    final face = faces[0];
+    final name = face['name'];
+
+    String message;
+    Color color;
+
+    if (name == "Spoof Detected") {
+      message = "Spoof Detected! Access denied.";
+      color = Colors.red;
+    } else if (name == "Unknown") {
+      message = "Unknown face. Please register first.";
+      color = Colors.orange;
+    } else if (name.contains("Error") || name.contains("Timeout") || name.contains("Pipe")) {
+      // Handle error names from the catch block
+      message = "Error: $name. Please try again.";
+      color = Colors.red;
+    } else {
+      // This is a successful recognition
+      message = "Welcome, $name. Attendance marked!";
+      color = Colors.green;
+    }
+
+    // Show the SnackBar
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: const Duration(milliseconds: 2500), // Show for 2.5 seconds
+      ),
+    );
+  }
+
+  // --- MODIFIED: _sendCurrentFrame ---
   Future<void> _sendCurrentFrame() async {
     if (_isProcessing) return;
     if (_controller == null || !_controller!.value.isInitialized) return;
 
     setState(() { _isProcessing = true; });
+
+    List<Map<String, dynamic>> recognitionResults = []; // Temp list
 
     try {
       final picture = await _controller!.takePicture();
@@ -204,29 +245,36 @@ class _CameraStreamPageState extends State<CameraStreamPage> {
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
-        setState(() {
-          _recognizedFaces = data.cast<Map<String, dynamic>>();
-        });
+        recognitionResults = data.cast<Map<String, dynamic>>(); // Store in temp
       } else {
-        setState(() {
-          _recognizedFaces = [{"name": "Server Error", "sap_id": "HTTP ${response.statusCode}"}];
-        });
+        recognitionResults = [{"name": "Server Error", "sap_id": "HTTP ${response.statusCode}"}]; // Store in temp
       }
     } catch (e) {
       // Handle known errors
       print("Error sending frame: $e");
       if (e is TimeoutException) {
-        _recognizedFaces = [{"name": "Connection Timeout", "sap_id": "Firewall?"}];
+        recognitionResults = [{"name": "Connection Timeout", "sap_id": "Firewall?"}]; // Store in temp
       } else if (e is SocketException) {
-        _recognizedFaces = [{"name": "Broken Pipe", "sap_id": "Server Crash?"}];
+        recognitionResults = [{"name": "Broken Pipe", "sap_id": "Server Crash?"}]; // Store in temp
       } else {
-        _recognizedFaces = [{"name": "Client Error", "sap_id": "Unknown"}];
+        recognitionResults = [{"name": "Client Error", "sap_id": "Unknown"}]; // Store in temp
       }
-      setState(() {}); // Update UI with error
     }
 
-    setState(() { _isProcessing = false; });
+    // Now, update state and show notification *once* at the end.
+    setState(() {
+      _recognizedFaces = recognitionResults;
+      _isProcessing = false;
+    });
+
+    // --- THIS IS THE NEW LOGIC ---
+    // Show a notification based on the *first* result
+    if (recognitionResults.isNotEmpty) {
+      _showAttendanceNotification(recognitionResults);
+    }
+    // --- END OF NEW LOGIC ---
   }
+  // --- END OF MODIFICATIONS ---
 
   @override
   void dispose() {
@@ -260,7 +308,7 @@ class _CameraStreamPageState extends State<CameraStreamPage> {
             children: [
               Center(
                 child: AspectRatio(
-                  aspectRatio: 3 / 4, // Force 9:16
+                  aspectRatio: 3 / 4, // Force 3:4
                   child: CameraPreview(_controller!),
                 ),
               ),
@@ -300,7 +348,17 @@ class _CameraStreamPageState extends State<CameraStreamPage> {
         final face = _recognizedFaces[index];
         final name = face['name'];
         final sapId = face['sap_id'];
-        final color = name == 'Unknown' ? Colors.red : Colors.green;
+
+        // --- MODIFIED: Color logic ---
+        Color color;
+        if (name == 'Unknown') {
+          color = Colors.orange;
+        } else if (name == 'Spoof Detected' || name.contains('Error')) {
+          color = Colors.red;
+        } else {
+          color = Colors.green;
+        }
+        // --- END OF MODIFICATION ---
 
         return Text(
           "Name: $name, SAP: $sapId",

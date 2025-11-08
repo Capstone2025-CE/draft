@@ -3,14 +3,21 @@ import uvicorn
 import cv2
 import numpy as np
 from typing import List
-from contextlib import asynccontextmanager 
+from contextlib import asynccontextmanager # For startup/shutdown events
 
 # Import the functions from your MODELTESTING file
 try:
-    from MODELTESTING import load_models_on_startup, recognize_face_in_frame, register_student_mongo
+    from MODELTESTING import (
+        load_models_on_startup, 
+        recognize_face_in_frame, 
+        register_student_mongo,
+        check_liveness  # <-- Make sure to import your new liveness function
+    )
 except ImportError:
     print("="*50)
     print("ERROR: Could not import from MODELTESTING.py")
+    print("Please make sure MODELTESTING.py is in the same directory.")
+    print("="*50)
     exit()
 
 # --- NEW: Lifespan Event Handler ---
@@ -18,7 +25,7 @@ except ImportError:
 async def lifespan(app: FastAPI):
     # Code to run on startup
     print("--- FastAPI server startup event triggered. ---")
-    print("--- Attempting to load models from MongoDB... ---")
+    print("--- Attempting to load all models... ---")
     load_models_on_startup() 
     print("--- Model loading process has finished. Server is ready. ---")
     
@@ -30,10 +37,11 @@ async def lifespan(app: FastAPI):
 # --- Pass the lifespan handler to your app ---
 app = FastAPI(lifespan=lifespan)
 
+
 @app.post("/recognize-frame")
 async def recognize_frame(frame: UploadFile = File(...)):
     """
-    Receives a frame, recognizes ALL faces,
+    Receives a frame, performs liveness check, recognizes ALL faces,
     and returns a JSON LIST of results.
     """
     try:
@@ -44,6 +52,19 @@ async def recognize_frame(frame: UploadFile = File(...)):
         if img is None:
             return [{"name": "Error: Corrupt image", "sap_id": "N/A"}]
 
+        # --- STEP 1: LIVENESS CHECK ---
+        # We check for a real face *before* doing expensive recognition
+        is_live = check_liveness(img)
+        
+        if not is_live:
+            print("!!! LIVENESS CHECK FAILED - SPOOF DETECTED !!!")
+            # Return a specific error your app can understand
+            return [{"name": "Spoof Detected", "sap_id": "N/A"}]
+        # --- END OF LIVENESS CHECK ---
+
+        # --- STEP 2: RECOGNITION ---
+        # This line will now ONLY run if the liveness check passed
+        print("--- Liveness check passed. Proceeding with recognition. ---")
         json_response_list = recognize_face_in_frame(img)
         
         print(f"Recognition result: {json_response_list}")
@@ -54,11 +75,11 @@ async def recognize_frame(frame: UploadFile = File(...)):
         return [{"name": "Server Error", "sap_id": str(e)}]
 
 
-# --- Student Registration Endpoint (1 Photo) ---
 @app.post("/student/register")
 async def register_student(
     sap_id: str = Form(...),
     name: str = Form(...),
+    email: str = Form(...), # Added email
     password: str = Form(...), 
     file: UploadFile = File(...) 
 ):
@@ -66,13 +87,13 @@ async def register_student(
     Receives student details and 1 image file for face registration.
     """
     
-    # --- THIS IS THE FIX ---
     # 1. Read the file contents as bytes asynchronously
     file_contents = await file.read()
     
     # 2. Pass the raw *bytes* (file_contents) to your processing function
-    result, status_code = register_student_mongo(sap_id, name, password, file_contents)
-    # --- END OF FIX ---
+    result, status_code = register_student_mongo(
+        sap_id, name, email, password, file_contents
+    )
 
     if status_code != 201:
         # If it failed, return the error message
@@ -80,7 +101,12 @@ async def register_student(
         
     return result
 
-# You must run this file with:
+# --- To run this file ---
+if __name__ == "__main__":
+    print("Starting FastAPI server...")
+    print("Access the API at http://0.0.0.0:8000")
+    uvicorn.run("backend_cap:app", host="0.0.0.0", port=8000, reload=True)
+
 # uvicorn backend_cap:app --host 0.0.0.0 --port 8000
 # tf-standalone\Scripts\Activate.ps1
 # ngrok http 8000
