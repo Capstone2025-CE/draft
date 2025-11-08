@@ -18,7 +18,7 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 // --- Your ngrok URL ---
-const String serverIp = "https://intertuberal-niki-nonexhibitionistic.ngrok-free.dev"; // UPDATE THIS
+const String serverIp = "https://intertuberal-niki-nonexhibitionistic.ngrok-free.dev";
 final String recognizeApiUrl = "$serverIp/recognize-frame";
 final String registerApiUrl = "$serverIp/student/register";
 

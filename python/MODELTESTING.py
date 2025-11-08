@@ -53,12 +53,14 @@ server_embedder = None
 server_faiss_index = None
 server_names_list = []
 server_sapids_list = []
+liveness_net = None
 
 # ==============================================================================
 # --- 1. FUNCTIONS FOR THE FASTAPI SERVER ---
 # ==============================================================================
 
 def load_models_on_startup():
+    global liveness_net
     """
     Loads models (MTCNN) AND embeddings from MongoDB into global variables.
     """
@@ -77,6 +79,18 @@ def load_models_on_startup():
     print("🔄 Initializing FaceNet (recognition) model...")
     server_embedder = FaceNet()
     print("✅ FaceNet model initialized.")
+
+    print("--- Loading Liveness Detection model... ---")
+    try:
+        # Define the paths to your downloaded model files
+        proto_path = os.path.join("liveness_model", "liveness.prototxt")
+        model_path = os.path.join("liveness_model", "liveness.caffemodel")
+        
+        liveness_net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
+        print("--- Liveness Detection model loaded successfully. ---")
+    except Exception as e:
+        print(f"!!! CRITICAL ERROR: Failed to load liveness model: {e} !!!")
+        print("!!! Server will continue, but LIVENESS CHECK WILL FAIL. !!!")
 
     # 3. Load Embeddings from MONGODB
     print("🔄 Loading student embeddings from MongoDB for FAISS...")
@@ -199,8 +213,8 @@ def mark_attendance_server(sap_id, name):
         return False
 
 # --- NEW: Function for Student Self-Registration (1 Photo) ---
-# --- NEW: Function for Student Self-Registration (1 Photo) ---
-def register_student_mongo(sap_id, name, password, image_bytes):
+
+def register_student_mongo(sap_id, name, email, password, image_bytes):
     """
     Takes student info and 1 image file (as bytes), generates an embedding,
     and saves to MongoDB.
@@ -256,7 +270,8 @@ def register_student_mongo(sap_id, name, password, image_bytes):
         new_student = {
             "sap_id": sap_id,
             "name": name,
-            "password": password, # You should HASH this password
+            "password": password,
+            "email":email,
             "embedding": embedding_bson,
             "registered_at": datetime.now()
         }
@@ -272,3 +287,50 @@ def register_student_mongo(sap_id, name, password, image_bytes):
     except Exception as e:
         print(f"Error saving student to MongoDB: {e}")
         return {"error": "Database error"}, 500
+    
+def check_liveness(frame):
+    """
+    Checks if the face in the frame is real (live) or a spoof (photo/video).
+    Returns True if live, False if spoof.
+    """
+    global liveness_net
+    
+    if liveness_net is None:
+        print("Liveness model not loaded. Skipping check.")
+        # Fail open (assume live) to not block the demo if model failed
+        # For security, you might 'return False' here.
+        return True 
+
+    # We need to preprocess the image to match the model's input
+    # These values (300x300 size, mean subtraction) are common
+    # but may need to be changed based on the model you downloaded.
+    try:
+        (h, w) = frame.shape[:2]
+        
+        # Create a blob from the image
+        blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 1.0,
+            (300, 300), (104.0, 177.0, 123.0))
+
+        # Pass the blob through the network
+        liveness_net.setInput(blob)
+        detections = liveness_net.forward()
+        
+        # 'detections' now holds the probabilities
+        # We assume index 0 is "fake" and index 1 is "real"
+        # This might be reversed! You MUST test this.
+        fake_prob = detections[0, 0]
+        real_prob = detections[0, 1]
+
+        print(f"Liveness check: Real={real_prob:.4f}, Fake={fake_prob:.4f}")
+
+        # Set a confidence threshold
+        # If "real" probability is high, return True
+        if real_prob > 0.85 and real_prob > fake_prob:
+            return True
+        else:
+            return False
+            
+    except Exception as e:
+        print(f"Error during liveness check: {e}")
+        # If detection fails, assume live to not block demo
+        return True

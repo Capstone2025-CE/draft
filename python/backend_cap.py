@@ -3,7 +3,7 @@ import uvicorn
 import cv2
 import numpy as np
 from typing import List
-from contextlib import asynccontextmanager # <-- NEW IMPORT
+from contextlib import asynccontextmanager 
 
 # Import the functions from your MODELTESTING file
 try:
@@ -30,9 +30,6 @@ async def lifespan(app: FastAPI):
 # --- Pass the lifespan handler to your app ---
 app = FastAPI(lifespan=lifespan)
 
-# --- REMOVED OLD @app.on_event("startup") ---
-
-
 @app.post("/recognize-frame")
 async def recognize_frame(frame: UploadFile = File(...)):
     """
@@ -57,7 +54,6 @@ async def recognize_frame(frame: UploadFile = File(...)):
         return [{"name": "Server Error", "sap_id": str(e)}]
 
 
-# --- Student Registration Endpoint (1 Photo) ---
 # --- Student Registration Endpoint (1 Photo) ---
 @app.post("/student/register")
 async def register_student(
@@ -86,3 +82,5 @@ async def register_student(
 
 # You must run this file with:
 # uvicorn backend_cap:app --host 0.0.0.0 --port 8000
+# tf-standalone\Scripts\Activate.ps1
+# ngrok http 8000
