@@ -11,7 +11,7 @@ try:
         load_models_on_startup, 
         recognize_face_in_frame, 
         register_student_mongo,
-        check_liveness  # <-- Make sure to import your new liveness function
+        check_liveness
     )
 except ImportError:
     print("="*50)
@@ -53,17 +53,14 @@ async def recognize_frame(frame: UploadFile = File(...)):
             return [{"name": "Error: Corrupt image", "sap_id": "N/A"}]
 
         # --- STEP 1: LIVENESS CHECK ---
-        # We check for a real face *before* doing expensive recognition
         is_live = check_liveness(img)
         
         if not is_live:
             print("!!! LIVENESS CHECK FAILED - SPOOF DETECTED !!!")
-            # Return a specific error your app can understand
             return [{"name": "Spoof Detected", "sap_id": "N/A"}]
         # --- END OF LIVENESS CHECK ---
 
         # --- STEP 2: RECOGNITION ---
-        # This line will now ONLY run if the liveness check passed
         print("--- Liveness check passed. Proceeding with recognition. ---")
         json_response_list = recognize_face_in_frame(img)
         
@@ -79,34 +76,28 @@ async def recognize_frame(frame: UploadFile = File(...)):
 async def register_student(
     sap_id: str = Form(...),
     name: str = Form(...),
-    email: str = Form(...), # Added email
     password: str = Form(...), 
     file: UploadFile = File(...) 
 ):
     """
-    Receives student details and 1 image file for face registration.
+    Receives student details (NO EMAIL) and 1 image file for face registration.
     """
     
-    # 1. Read the file contents as bytes asynchronously
     file_contents = await file.read()
     
-    # 2. Pass the raw *bytes* (file_contents) to your processing function
+    # Call the updated function (no email)
     result, status_code = register_student_mongo(
-        sap_id, name, email, password, file_contents
+        sap_id, name, password, file_contents
     )
 
     if status_code != 201:
-        # If it failed, return the error message
         raise HTTPException(status_code=status_code, detail=result["error"])
         
     return result
 
 # --- To run this file ---
-if __name__ == "__main__":
+if __name__ == "_main_":
     print("Starting FastAPI server...")
     print("Access the API at http://0.0.0.0:8000")
-    uvicorn.run("backend_cap:app", host="0.0.0.0", port=8000, reload=True)
-
-# uvicorn backend_cap:app --host 0.0.0.0 --port 8000
-# tf-standalone\Scripts\Activate.ps1
-# ngrok http 8000
+    # Set reload=False for stable production, reload=True for development
+    uvicorn.run("backend_cap:app", host="0.0.0.0", port=8000, reload=False)
